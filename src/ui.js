@@ -81,3 +81,27 @@ function drawGameOver() {
   text("Click anywhere to return to Menu", width / 2, height / 2 + 80);
   pop();
 }
+
+function drawScoreboard() {
+  push();
+  // Semi-transparent background for the UI
+  fill(0, 150);
+  noStroke();
+  rect(10, 10, 180, 80, 10);
+
+  // Draw Labels
+  textAlign(LEFT);
+  textSize(16);
+  fill(200);
+  text("SCORE:", 25, 35);
+  text("BEST:", 25, 65);
+
+  // Draw Numbers
+  textAlign(RIGHT);
+  textSize(22);
+  fill(255, 255, 0); // Gold color for score
+  text(score, 175, 35);
+  fill(255);
+  text(highScore, 175, 65);
+  pop();
+}

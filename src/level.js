@@ -35,7 +35,19 @@ class GamePath {
   }
 
   loadCustomPath(levelId) {
-    let data = levelData[levelId] || levelData[2]; // Fallback to level 2
+    // 1. Get the level object (e.g., levelData[2])
+    let levelObj = levelData[levelId];
+    
+    // Fallback if the level doesn't exist
+    if (!levelObj) {
+      console.warn("Level " + levelId + " not found, falling back to Level 1 spiral.");
+      this.generateSpiral();
+      return;
+    }
+
+    // 2. The FIX: Point 'data' to the 'path' array specifically
+    let data = levelObj.path; 
+
     for (let p of data) {
       // Scale decimal (0-1) to screen size
       this.addPoint(createVector(p.x * width, p.y * height));
@@ -45,7 +57,12 @@ class GamePath {
   // Helper to keep math clean
   addPoint(p) {
     this.points.push(p);
-    if (this.points.length > 1) {
+    // If it's the first point, distance is 0
+    if (this.points.length === 1) {
+      this.distances = [0];
+      this.totalLength = 0;
+    } else {
+      // Calculate distance from previous point
       let prev = this.points[this.points.length - 2];
       let d = dist(prev.x, prev.y, p.x, p.y);
       this.totalLength += d;

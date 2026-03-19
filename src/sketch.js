@@ -14,6 +14,10 @@ let pixelSpacing = 38;
 
 let floatingTexts = [];
 
+let score = 0;
+let highScore = 0;
+let comboMultiplier = 1;
+
 const levels = [
   { id: 1, speed: 0.5, count: 20 },
   { id: 2, speed: 0.75, count: 35 },
@@ -25,6 +29,8 @@ function setup() {
   path = new GamePath();
   player = new Shooter(width / 2, height / 2);
   textAlign(CENTER, CENTER);
+  let saved = localStorage.getItem("zumaHighScore");
+  if (saved) highScore = parseInt(saved);
 }
 
 function draw() {
@@ -36,6 +42,7 @@ function draw() {
     drawLevelSelect();
   } else if (gameState === "PLAYING") {
     runGameLogic();
+    drawScoreboard();
   } else if (gameState === "GAMEOVER") {
     drawGameOver();
   }
@@ -44,7 +51,7 @@ function draw() {
     let ft = floatingTexts[i];
     ft.y -= 1.5;    // Float upward
     ft.alpha -= 4;  // Slowly fade away
-    
+
     push();
     textAlign(CENTER);
     textSize(24);
@@ -103,10 +110,10 @@ function runGameLogic() {
 
       // Logic: Front section is STOPPED, back section is MOVING
       if (movementStatus[i - 1] === false && movementStatus[i] === true) {
-        
+
         // If they are within snapping range (pixelSpacing + a small buffer)
         if (gap <= pixelSpacing + 5) {
-          
+
           // 1. FORCE THE SNAP (Critical for the math to work)
           current.pixelDist = front.pixelDist - pixelSpacing;
           current.updatePosition(); // Refresh X, Y coordinates immediately
@@ -114,12 +121,13 @@ function runGameLogic() {
           // 2. CHECK TYPE
           if (front.type === current.type) {
             console.log("Magnetic Match Triggered!");
-            
+            comboMultiplier++;
+
             // 3. TRIGGER MATCH on the connection
-            checkMatches(i); 
-            
+            checkMatches(i);
+
             // 4. BREAK immediately so we don't process a dead array
-            break; 
+            break;
           }
         }
       }
@@ -140,6 +148,16 @@ function runGameLogic() {
       e.display();
     }
     if (e.pixelDist >= path.totalLength) {
+      gameState = "GAMEOVER";
+    }
+
+    // Inside runGameLogic or wherever you check for Game Over
+    if (e.pixelDist >= path.totalLength) {
+      if (score > highScore) {
+        highScore = score;
+        // Optional: Save to browser memory
+        localStorage.setItem("zumaHighScore", highScore);
+      }
       gameState = "GAMEOVER";
     }
   }
@@ -191,7 +209,8 @@ function mousePressed() {
     }
   }
   else if (gameState === "PLAYING") {
-    if (!bullet) bullet = player.fire();
+    bullet = player.fire();
+    comboMultiplier = 1;
   }
   else if (gameState === "GAMEOVER") {
     gameState = "MENU";
@@ -206,14 +225,28 @@ function startLevel(lvl) {
   path.setupPath(currentLevel);
 
   // 2. Center the shooter at the end of the new path
-  let lastPoint = path.points[path.points.length - 1];
-  player.x = lastPoint.x;
-  player.y = lastPoint.y;
-
-  emojiChain = [];
-  for (let i = 0; i < lvl.count; i++) {
-    emojiChain.push(new Emoji(random(emojiTypes), -i * pixelSpacing, path));
+ if (typeof levelData !== 'undefined' && levelData[currentLevel]) {
+    let pos = levelData[currentLevel].shooterPos;
+    player.x = pos.x * width;
+    player.y = pos.y * height;
+  } else {
+    // Fallback: If level data is missing, put phone in center
+    console.warn("Level data or shooterPos missing for level: " + currentLevel);
+    player.x = width / 2;
+    player.y = height / 2;
   }
+
+  // 4. Reset Game State
+  score = 0;
+  emojiChain = [];
+  
+  // Create initial emojis for the train
+  for (let i = 0; i < lvl.count; i++) {
+    let type = random(emojiTypes);
+    let dist = -i * pixelSpacing;
+    emojiChain.push(new Emoji(type, dist, path));
+  }
+
   gameState = "PLAYING";
 }
 
@@ -230,10 +263,10 @@ function checkMatches(index) {
     if (emojiChain[i].type === targetType) {
       matchIndices.push(i);
     } else {
-      break; 
+      break;
     }
   }
-
+  1
   // 3. Scan Backward (towards the start of the path)
   for (let i = index - 1; i >= 0; i--) {
     if (emojiChain[i].type === targetType) {
@@ -245,18 +278,21 @@ function checkMatches(index) {
 
   // 4. POP LOGIC: Only if 3 or more are touching
   if (matchIndices.length >= 3) {
-    // Sort High to Low so splicing doesn't change the index of items we still need to delete
+    // CALCULATE POINTS: 10 points per emoji * multiplier
+    let pointsGained = (matchIndices.length * 10) * comboMultiplier;
+    score += pointsGained;
+
+    // Show the points floating in the air
+    if (typeof spawnFloatingText === "function") {
+      let msg = "+" + pointsGained + (comboMultiplier > 1 ? " (x" + comboMultiplier + "!)" : "");
+      spawnFloatingText(msg, emojiChain[index].x, emojiChain[index].y);
+    }
+
+    // Sort High to Low and Splice
     matchIndices.sort((a, b) => b - a);
-    
     for (let idx of matchIndices) {
       emojiChain.splice(idx, 1);
     }
-    
-    // Feedback
-    if (typeof spawnFloatingText === "function") {
-      spawnFloatingText("COMBO!", mouseX, mouseY);
-    }
-    console.log("Popped group of: " + matchIndices.length);
   }
 }
 
