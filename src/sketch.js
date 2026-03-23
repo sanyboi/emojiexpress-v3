@@ -6,6 +6,7 @@ let emojiChain = [];
 let emojiTypes = ["😀", "😎", "😡", "😱", "🤖"];
 let bullet = null;
 let gameState = "MENU";
+let tutorialStep = 0;
 let highestLevelUnlocked = 1;
 let currentLevel = 1;
 
@@ -17,20 +18,78 @@ let floatingTexts = [];
 let score = 0;
 let highScore = 0;
 let comboMultiplier = 1;
+let menuBg;
 
 const levels = [
-  { id: 1, speed: 0.5, count: 20 },
-  { id: 2, speed: 0.75, count: 35 },
-  { id: 3, speed: 2.5, count: 50 }
+  { id: 1, speed: 0.5,  count: 20 }, // Level 1: Spiral (Slow intro)
+  { id: 2, speed: 0.5, count: 30 }, // Level 2: Z-Shape
+  { id: 3, speed: 0.5,  count: 40 }, // Level 3: Waves
+  { id: 4, speed: 0.5, count: 45 }, // Level 4: Square Box
+  { id: 5, speed: 0.5,  count: 50 }, // Level 5: Hourglass
+  { id: 6, speed: 0.5, count: 55 }, // Level 6: Snake (Faster turns)
+  { id: 7, speed: 0.5,  count: 60 }, // Level 7: Triangle
+  { id: 8, speed: 0.5, count: 65 }, // Level 8: Diamond
+  { id: 9, speed: 0.5,  count: 70 }, // Level 9: U-Turn (Very long)
+  { id: 10, speed: 0.5, count: 80 }  // Level 10: Spiral Square (Boss level!)
 ];
 
-function setup() {
+async function setup() {
   createCanvas(windowWidth, windowHeight);
+  
+  // --- STEP 3: THE SAFETY CHECK ---
+  // If auth.js failed or loaded slowly, db will be undefined.
+  if (typeof db === 'undefined' || !db) {
+    console.warn("Firebase 'db' not found. Using local storage only.");
+    // We don't crash the game; we just load local data and stop the sync attempt
+    let saved = localStorage.getItem("zumaHighScore");
+    if (saved) highScore = parseInt(saved);
+    
+    path = new GamePath();
+    player = new Shooter(width / 2, height / 2);
+    textAlign(CENTER, CENTER);
+    return; // Exit the function early so the cloud code below doesn't run
+  }
+
+  // --- RE-INITIALIZE GAME OBJECTS ---
   path = new GamePath();
   player = new Shooter(width / 2, height / 2);
   textAlign(CENTER, CENTER);
+
+  // 1. Local Storage Fallback (Initial check)
   let saved = localStorage.getItem("zumaHighScore");
   if (saved) highScore = parseInt(saved);
+
+  // 2. --- STEP 4b: Firebase Cloud Sync ---
+  try {
+    console.log("Fetching player data from Firebase...");
+    
+    // Attempt to get the document for this specific player
+    const doc = await db.collection("players").doc(playerId).get();
+
+    if (doc.exists) {
+      const data = doc.data();
+      
+      // Update our game variables with cloud data
+      highestLevelUnlocked = data.highestLevel || 1;
+      
+      // If cloud highscore is better than local, use it
+      if (data.totalScore > highScore) {
+        highScore = data.totalScore;
+        localStorage.setItem("zumaHighScore", highScore);
+      }
+      
+      console.log("Cloud Data Synced: Highest Level " + highestLevelUnlocked);
+    } else {
+      console.log("No existing cloud profile. Starting fresh!");
+    }
+  } catch (error) {
+    console.error("Firebase Sync Failed:", error);
+  }
+}
+
+function preload() {
+  // Make sure this matches the filename of the NEW image you saved
+  menuBg = loadImage('assets/menu_bg3.png'); 
 }
 
 function draw() {
@@ -38,11 +97,19 @@ function draw() {
 
   if (gameState === "MENU") {
     drawMainMenu();
+  } else if (gameState === "TUTORIAL") {
+    drawTutorial();
+    player.update();
   } else if (gameState === "LEVEL_SELECT") {
     drawLevelSelect();
   } else if (gameState === "PLAYING") {
     runGameLogic();
+    drawGame();
     drawScoreboard();
+    drawPauseButton();
+  } else if (gameState === "PAUSED") {
+    drawGame();        // Draw the game frozen in the background
+    drawPauseMenu();
   } else if (gameState === "GAMEOVER") {
     drawGameOver();
   }
@@ -66,6 +133,27 @@ function draw() {
       floatingTexts.splice(i, 1);
     }
   }
+}
+
+function drawGame() {
+  // 1. Draw the track
+  path.display();
+
+  // 2. Draw the Emoji Chain
+  for (let i = 0; i < emojiChain.length; i++) {
+    let e = emojiChain[i];
+    if (e.pixelDist > 0) {
+      e.display(); // Only display, don't update position
+    }
+  }
+
+  // 3. Draw the Bullet
+  if (bullet) {
+    bullet.display();
+  }
+
+  // 4. Draw the Player
+  player.display();
 }
 
 // --- CORE GAME ENGINE ---
@@ -133,9 +221,13 @@ function runGameLogic() {
       }
     }
   } else {
-    // WIN CONDITION
     if (currentLevel === highestLevelUnlocked && highestLevelUnlocked < levels.length) {
       highestLevelUnlocked++;
+      
+      // Step 4: Save the new progress to Firebase
+      if (typeof saveProgressToCloud === "function") {
+          saveProgressToCloud(highestLevelUnlocked);
+      }
     }
     gameState = "LEVEL_SELECT";
   }
@@ -197,24 +289,89 @@ function runGameLogic() {
 
 function mousePressed() {
   if (gameState === "MENU") {
-    // Click Start Button
-    if (dist(mouseX, mouseY, width / 2, height / 2) < 100) gameState = "LEVEL_SELECT";
+    let btnW = 240;
+    let btnH = 60;
+
+    let startY = height * 0.75;
+    let tutY = height * 0.88;
+
+    // Click START GAME
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - startY) < btnH / 2) {
+      gameState = "LEVEL_SELECT";
+    }
+   
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - tutY) < btnH / 2) {
+      gameState = "TUTORIAL";
+      tutorialStep = 0; // Reset tutorial to page 1
+      path.setupPath(1);
+    }
   }
-  else if (gameState === "LEVEL_SELECT") {
+  else if (gameState === "TUTORIAL") {
+    // Click anywhere to advance or exit
+    if (tutorialStep < 2) {
+      tutorialStep++;
+    } else {
+      gameState = "MENU";
+    }
+  }
+ else if (gameState === "LEVEL_SELECT") {
+    let cols = 3;
+    let spacingX = 150;
+    let spacingY = 150;
+    let startX = width / 2 - spacingX;
+    let startY = height * 0.35;
+
     for (let i = 0; i < levels.length; i++) {
-      let y = 200 + (i * 80);
-      if (abs(mouseX - width / 2) < 150 && abs(mouseY - y) < 30) {
-        if (levels[i].id <= highestLevelUnlocked) startLevel(levels[i]);
+      let col = i % cols;
+      let row = floor(i / cols);
+      let x = startX + col * spacingX;
+      let y = startY + row * spacingY;
+
+      // Check if mouse is inside the circle
+      if (dist(mouseX, mouseY, x, y) < 50) {
+        if (levels[i].id <= highestLevelUnlocked) {
+          startLevel(levels[i]);
+        }
       }
     }
   }
   else if (gameState === "PLAYING") {
+    if (mouseX > width - 60 && mouseX < width - 20 && mouseY > 20 && mouseY < 60) {
+      gameState = "PAUSED";
+      return; // Stop here so we don't shoot a bullet
+    }
+
     bullet = player.fire();
     comboMultiplier = 1;
+  }
+  else if (gameState === "PAUSED") {
+    // --- PAUSE MENU BUTTON LOGIC ---
+    let btnW = 250;
+    let btnH = 60;
+    
+    // 1. CONTINUE
+    let y1 = height * 0.45;
+    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y1) < btnH/2) {
+      gameState = "PLAYING";
+    }
+    
+    // 2. START OVER
+    let y2 = height * 0.45 + 80;
+    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y2) < btnH/2) {
+      // Use currentLevel-1 because the array starts at index 0
+      startLevel(levels[currentLevel - 1]); 
+    }
+    
+    // 3. MAIN MENU
+    let y3 = height * 0.45 + 160;
+    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y3) < btnH/2) {
+      gameState = "MENU";
+    }
   }
   else if (gameState === "GAMEOVER") {
     gameState = "MENU";
   }
+
 }
 
 function startLevel(lvl) {
@@ -225,7 +382,7 @@ function startLevel(lvl) {
   path.setupPath(currentLevel);
 
   // 2. Center the shooter at the end of the new path
- if (typeof levelData !== 'undefined' && levelData[currentLevel]) {
+  if (typeof levelData !== 'undefined' && levelData[currentLevel]) {
     let pos = levelData[currentLevel].shooterPos;
     player.x = pos.x * width;
     player.y = pos.y * height;
@@ -239,7 +396,7 @@ function startLevel(lvl) {
   // 4. Reset Game State
   score = 0;
   emojiChain = [];
-  
+
   // Create initial emojis for the train
   for (let i = 0; i < lvl.count; i++) {
     let type = random(emojiTypes);
@@ -304,4 +461,17 @@ function spawnFloatingText(msg, x, y) {
     y: y,
     alpha: 255
   });
+}
+
+async function saveProgressToCloud(levelReached) {
+  try {
+    await db.collection("players").doc(playerId).set({
+      highestLevel: levelReached,
+      lastPlayed: firebase.firestore.FieldValue.serverTimestamp(),
+      totalScore: highScore // You can save the high score here too!
+    }, { merge: true }); // 'merge: true' updates existing data without deleting it
+    console.log("Progress saved to cloud!");
+  } catch (error) {
+    console.error("Error saving to Firestore: ", error);
+  }
 }

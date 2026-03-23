@@ -18,11 +18,13 @@ class GamePath {
     }
   }
 
+  // src/level.js inside GamePath class
   generateSpiral() {
+    this.points = []; // Clear old points
     let centerX = width / 2;
     let centerY = height / 2;
-    let revs = 3; 
-    let maxRadius = min(width, height) * 0.45;
+    let revs = 3;
+    let maxRadius = min(width, height) * 0.40; // Slightly smaller to fit
     let segments = 500;
 
     for (let i = 0; i <= segments; i++) {
@@ -32,26 +34,31 @@ class GamePath {
       let y = centerY + sin(angle) * radius;
       this.addPoint(createVector(x, y));
     }
+    console.log("Spiral generated with " + this.points.length + " points");
   }
 
   loadCustomPath(levelId) {
-    // 1. Get the level object (e.g., levelData[2])
     let levelObj = levelData[levelId];
-    
-    // Fallback if the level doesn't exist
-    if (!levelObj) {
-      console.warn("Level " + levelId + " not found, falling back to Level 1 spiral.");
+
+    if (!levelObj || !levelObj.path || levelObj.path.length === 0) {
+      console.warn("Level " + levelId + " path data missing, generating Spiral.");
       this.generateSpiral();
       return;
     }
 
-    // 2. The FIX: Point 'data' to the 'path' array specifically
-    let data = levelObj.path; 
+    // Clear current path data before loading new points
+    this.points = [];
+    this.distances = [0];
+    this.totalLength = 0;
+
+    let data = levelObj.path;
 
     for (let p of data) {
-      // Scale decimal (0-1) to screen size
+      // Scale decimal (0.1) to actual pixel values (e.g., 0.1 * 800 = 80px)
       this.addPoint(createVector(p.x * width, p.y * height));
     }
+    
+    console.log("Loaded Custom Path for Level " + levelId);
   }
 
   // Helper to keep math clean
