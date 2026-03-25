@@ -1,4 +1,3 @@
-// src/sketch.js
 
 let path;
 let player;
@@ -16,34 +15,39 @@ let pixelSpacing = 38;
 let floatingTexts = [];
 
 let score = 0;
-let highScore = 0;
+let levelHighScores = {};
 let comboMultiplier = 1;
 let menuBg;
+let isMusicOn = true; // Default to ON
+let clickSound;
+let shootSound;
+let particles = [];
+
+
 
 const levels = [
-  { id: 1, speed: 0.5,  count: 20 }, // Level 1: Spiral (Slow intro)
+  { id: 1, speed: 0.5, count: 20 }, // Level 1: Spiral (Slow intro)
   { id: 2, speed: 0.5, count: 30 }, // Level 2: Z-Shape
-  { id: 3, speed: 0.5,  count: 40 }, // Level 3: Waves
+  { id: 3, speed: 0.5, count: 40 }, // Level 3: Waves
   { id: 4, speed: 0.5, count: 45 }, // Level 4: Square Box
-  { id: 5, speed: 0.5,  count: 50 }, // Level 5: Hourglass
+  { id: 5, speed: 0.5, count: 50 }, // Level 5: Hourglass
   { id: 6, speed: 0.5, count: 55 }, // Level 6: Snake (Faster turns)
-  { id: 7, speed: 0.5,  count: 60 }, // Level 7: Triangle
+  { id: 7, speed: 0.5, count: 60 }, // Level 7: Triangle
   { id: 8, speed: 0.5, count: 65 }, // Level 8: Diamond
-  { id: 9, speed: 0.5,  count: 70 }, // Level 9: U-Turn (Very long)
+  { id: 9, speed: 0.5, count: 70 }, // Level 9: U-Turn (Very long)
   { id: 10, speed: 0.5, count: 80 }  // Level 10: Spiral Square (Boss level!)
 ];
 
 async function setup() {
   createCanvas(windowWidth, windowHeight);
-  
   // --- STEP 3: THE SAFETY CHECK ---
   // If auth.js failed or loaded slowly, db will be undefined.
   if (typeof db === 'undefined' || !db) {
     console.warn("Firebase 'db' not found. Using local storage only.");
     // We don't crash the game; we just load local data and stop the sync attempt
-    let saved = localStorage.getItem("zumaHighScore");
-    if (saved) highScore = parseInt(saved);
-    
+    let saved = localStorage.getItem("zumaLevelHighScores");
+    if (saved) levelHighScores = JSON.parse(saved);
+
     path = new GamePath();
     player = new Shooter(width / 2, height / 2);
     textAlign(CENTER, CENTER);
@@ -56,31 +60,19 @@ async function setup() {
   textAlign(CENTER, CENTER);
 
   // 1. Local Storage Fallback (Initial check)
-  let saved = localStorage.getItem("zumaHighScore");
-  if (saved) highScore = parseInt(saved);
+ let saved = localStorage.getItem("zumaLevelHighScores");
+  if (saved) levelHighScores = JSON.parse(saved);
 
-  // 2. --- STEP 4b: Firebase Cloud Sync ---
   try {
-    console.log("Fetching player data from Firebase...");
-    
-    // Attempt to get the document for this specific player
     const doc = await db.collection("players").doc(playerId).get();
-
     if (doc.exists) {
       const data = doc.data();
-      
-      // Update our game variables with cloud data
       highestLevelUnlocked = data.highestLevel || 1;
-      
-      // If cloud highscore is better than local, use it
-      if (data.totalScore > highScore) {
-        highScore = data.totalScore;
-        localStorage.setItem("zumaHighScore", highScore);
+      // Sync Level-Specific High Scores
+      if (data.levelHighScores) {
+        levelHighScores = data.levelHighScores;
+        localStorage.setItem("zumaLevelHighScores", JSON.stringify(levelHighScores));
       }
-      
-      console.log("Cloud Data Synced: Highest Level " + highestLevelUnlocked);
-    } else {
-      console.log("No existing cloud profile. Starting fresh!");
     }
   } catch (error) {
     console.error("Firebase Sync Failed:", error);
@@ -89,14 +81,44 @@ async function setup() {
 
 function preload() {
   // Make sure this matches the filename of the NEW image you saved
-  menuBg = loadImage('assets/menu_bg3.png'); 
+  menuBg = loadImage('assets/menu_bg3.png');
+  bgMusic = loadSound('assets/background_music.mp3');
+  clickSound = loadSound('assets/click_sfx.wav');
+  shootSound = loadSound('assets/shoot_sfx.wav');
 }
 
 function draw() {
   background(10, 10, 25);
 
+  for (let i = particles.length - 1; i >= 0; i--) {
+    particles[i].update();
+    particles[i].display();
+    if (particles[i].alpha <= 0) {
+      particles.splice(i, 1);
+    }
+  }
+
+  if (bgMusic && bgMusic.isLoaded()) {
+    if (gameState === "MENU" || gameState === "CONFIRM_RESET") {
+      // If we are in the menu and music is ON but not playing, start it
+      if (isMusicOn && !bgMusic.isPlaying()) {
+        bgMusic.loop();
+        bgMusic.setVolume(0.5, 1); // Fade in over 1 second
+      }
+    } else {
+      // If the player leaves the menu, stop the music
+      if (bgMusic.isPlaying()) {
+        bgMusic.setVolume(0, 0.5); // Fade out over 0.5 seconds
+        bgMusic.stop();
+      }
+    }
+  }
   if (gameState === "MENU") {
     drawMainMenu();
+  } else if (gameState === "CONFIRM_RESET") {
+    drawMainMenu();   // Draw menu in background
+    drawConfirmModal(); // Overlay modal on top
+
   } else if (gameState === "TUTORIAL") {
     drawTutorial();
     player.update();
@@ -137,6 +159,8 @@ function draw() {
 
 function drawGame() {
   // 1. Draw the track
+
+  drawingContext.shadowBlur = 0;
   path.display();
 
   // 2. Draw the Emoji Chain
@@ -146,6 +170,7 @@ function drawGame() {
       e.display(); // Only display, don't update position
     }
   }
+
 
   // 3. Draw the Bullet
   if (bullet) {
@@ -221,12 +246,18 @@ function runGameLogic() {
       }
     }
   } else {
+
+    if (!levelHighScores[currentLevel] || score > levelHighScores[currentLevel]) {
+      levelHighScores[currentLevel] = score;
+      localStorage.setItem("zumaLevelHighScores", JSON.stringify(levelHighScores));
+    } 
+
     if (currentLevel === highestLevelUnlocked && highestLevelUnlocked < levels.length) {
       highestLevelUnlocked++;
-      
+
       // Step 4: Save the new progress to Firebase
       if (typeof saveProgressToCloud === "function") {
-          saveProgressToCloud(highestLevelUnlocked);
+        saveProgressToCloud(highestLevelUnlocked);
       }
     }
     gameState = "LEVEL_SELECT";
@@ -245,10 +276,12 @@ function runGameLogic() {
 
     // Inside runGameLogic or wherever you check for Game Over
     if (e.pixelDist >= path.totalLength) {
-      if (score > highScore) {
-        highScore = score;
-        // Optional: Save to browser memory
-        localStorage.setItem("zumaHighScore", highScore);
+      if (!levelHighScores[currentLevel] || score > levelHighScores[currentLevel]) {
+        levelHighScores[currentLevel] = score;
+        localStorage.setItem("zumaLevelHighScores", JSON.stringify(levelHighScores));
+        if (typeof saveProgressToCloud === "function") {
+          saveProgressToCloud(highestLevelUnlocked, levelHighScores);
+        }
       }
       gameState = "GAMEOVER";
     }
@@ -288,33 +321,96 @@ function runGameLogic() {
 // --- INPUT HANDLING ---
 
 function mousePressed() {
+
+  if (clickSound && isMusicOn) {
+    let randomPitch = random(0.9, 1.1);
+    clickSound.rate(randomPitch);
+    clickSound.play();
+  }
+
   if (gameState === "MENU") {
     let btnW = 240;
-    let btnH = 60;
+    let btnH = 55; // Matching the slightly shorter height from drawMainMenu
 
-    let startY = height * 0.75;
-    let tutY = height * 0.88;
+    // These Y positions MUST match exactly what you have in drawMainMenu()
+    let startY = height * 0.70;   // Continue/Start
+    let newGameY = height * 0.80; // New Game
+    let tutY = height * 0.90;     // How to Play
+    let musicBtnX = width - 60;
+    let musicBtnY = height - 60;
 
-    // Click START GAME
+    if (dist(mouseX, mouseY, musicBtnX, musicBtnY) < 30) {
+      isMusicOn = !isMusicOn;
+
+      if (isMusicOn) {
+        bgMusic.loop();
+      } else {
+        bgMusic.stop();
+      }
+    }
+
+    // 1. CONTINUE / START GAME
     if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - startY) < btnH / 2) {
+      if (isMusicOn && !bgMusic.isPlaying()) {
+        bgMusic.loop();
+      }
       gameState = "LEVEL_SELECT";
     }
-   
+
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - newGameY) < btnH / 2) {
+      gameState = "CONFIRM_RESET";
+    }
+    // 3. HOW TO PLAY
     if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - tutY) < btnH / 2) {
       gameState = "TUTORIAL";
-      tutorialStep = 0; // Reset tutorial to page 1
+      tutorialStep = 0;
       path.setupPath(1);
     }
   }
+
+  // --- NEW STATE: HANDLE MODAL BUTTONS ---
+  // --- HANDLE MODAL BUTTONS ---
+  else if (gameState === "CONFIRM_RESET") {
+    let modalBtnW = 120;
+    let modalBtnH = 45;
+
+    // --- YES (RESET) BUTTON ---
+    if (abs(mouseX - (width / 2 - 80)) < modalBtnW / 2 && abs(mouseY - (height / 2 + 60)) < modalBtnH / 2) {
+
+      // 1. Reset ALL progress and scores
+      highestLevelUnlocked = 1;
+      score = 0;
+      levelHighScores = {};
+
+      // 2. Clear Local Storage
+      localStorage.setItem("zumaLevelHighScores", JSON.stringify(levelHighScores));
+
+      // 3. Sync the "Zeroed" data to Cloud
+      if (typeof saveProgressToCloud === "function") {
+        saveProgressToCloud(1, levelHighScores);
+      }
+
+      // 4. Clean the styles to prevent "pale" emojis
+      drawingContext.shadowBlur = 0;
+      drawingContext.shadowColor = 'rgba(0,0,0,0)';
+
+      gameState = "LEVEL_SELECT";
+    }
+
+    // --- NO (CANCEL) BUTTON ---
+    if (abs(mouseX - (width / 2 + 80)) < modalBtnW / 2 && abs(mouseY - (height / 2 + 60)) < modalBtnH / 2) {
+      gameState = "MENU";
+    }
+  }
   else if (gameState === "TUTORIAL") {
-    // Click anywhere to advance or exit
     if (tutorialStep < 2) {
       tutorialStep++;
     } else {
       gameState = "MENU";
     }
   }
- else if (gameState === "LEVEL_SELECT") {
+
+  else if (gameState === "LEVEL_SELECT") {
     let cols = 3;
     let spacingX = 150;
     let spacingY = 150;
@@ -327,7 +423,6 @@ function mousePressed() {
       let x = startX + col * spacingX;
       let y = startY + row * spacingY;
 
-      // Check if mouse is inside the circle
       if (dist(mouseX, mouseY, x, y) < 50) {
         if (levels[i].id <= highestLevelUnlocked) {
           startLevel(levels[i]);
@@ -335,46 +430,49 @@ function mousePressed() {
       }
     }
   }
+
   else if (gameState === "PLAYING") {
+    // Pause button check
     if (mouseX > width - 60 && mouseX < width - 20 && mouseY > 20 && mouseY < 60) {
       gameState = "PAUSED";
-      return; // Stop here so we don't shoot a bullet
+      return;
     }
 
+    if (isMusicOn && shootSound) shootSound.play();
     bullet = player.fire();
     comboMultiplier = 1;
   }
+
   else if (gameState === "PAUSED") {
-    // --- PAUSE MENU BUTTON LOGIC ---
     let btnW = 250;
     let btnH = 60;
-    
-    // 1. CONTINUE
-    let y1 = height * 0.45;
-    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y1) < btnH/2) {
+
+    let y1 = height * 0.45;      // CONTINUE
+    let y2 = height * 0.45 + 80; // START OVER
+    let y3 = height * 0.45 + 160; // MAIN MENU
+
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - y1) < btnH / 2) {
       gameState = "PLAYING";
     }
-    
-    // 2. START OVER
-    let y2 = height * 0.45 + 80;
-    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y2) < btnH/2) {
-      // Use currentLevel-1 because the array starts at index 0
-      startLevel(levels[currentLevel - 1]); 
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - y2) < btnH / 2) {
+      startLevel(levels[currentLevel - 1]);
     }
-    
-    // 3. MAIN MENU
-    let y3 = height * 0.45 + 160;
-    if (abs(mouseX - width/2) < btnW/2 && abs(mouseY - y3) < btnH/2) {
+    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - y3) < btnH / 2) {
       gameState = "MENU";
     }
   }
+
   else if (gameState === "GAMEOVER") {
     gameState = "MENU";
   }
-
 }
 
 function startLevel(lvl) {
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowColor = 'rgba(0,0,0,0)';
+
+
+  currentLevelScore = 0;
   currentLevel = lvl.id;
   pixelSpeed = lvl.speed;
 
@@ -409,13 +507,12 @@ function startLevel(lvl) {
 
 
 function checkMatches(index) {
-  // 1. Safety Check
   if (index < 0 || index >= emojiChain.length) return;
 
   let targetType = emojiChain[index].type;
   let matchIndices = [index];
 
-  // 2. Scan Forward (towards the end of the path)
+  // 2. Scan Forward
   for (let i = index + 1; i < emojiChain.length; i++) {
     if (emojiChain[i].type === targetType) {
       matchIndices.push(i);
@@ -423,8 +520,8 @@ function checkMatches(index) {
       break;
     }
   }
-  1
-  // 3. Scan Backward (towards the start of the path)
+
+  // 3. Scan Backward
   for (let i = index - 1; i >= 0; i--) {
     if (emojiChain[i].type === targetType) {
       matchIndices.push(i);
@@ -433,23 +530,45 @@ function checkMatches(index) {
     }
   }
 
-  // 4. POP LOGIC: Only if 3 or more are touching
+  // 4. POP LOGIC
   if (matchIndices.length >= 3) {
-    // CALCULATE POINTS: 10 points per emoji * multiplier
+
+    // --- STEP 3: SPLASH EFFECT LOGIC ---
+    // Pick a color based on emoji type
+    let splashCol = color(255, 255, 0); // Default Yellow
+    if (targetType === "😡") splashCol = color(255, 50, 50);   // Red
+    if (targetType === "😎") splashCol = color(50, 150, 255);  // Blue
+    if (targetType === "🤖") splashCol = color(150, 150, 150); // Grey
+
+    // Create particles for each emoji in the match
+    for (let idx of matchIndices) {
+      let e = emojiChain[idx];
+      // Spawn 10 particles per emoji popped
+      for (let p = 0; p < 10; p++) {
+        // Assuming your particle array is named 'particles'
+        if (typeof particles !== 'undefined') {
+          particles.push(new Particle(e.x, e.y, splashCol));
+        }
+      }
+    }
+    // -----------------------------------
+
     let pointsGained = (matchIndices.length * 10) * comboMultiplier;
     score += pointsGained;
 
-    // Show the points floating in the air
     if (typeof spawnFloatingText === "function") {
       let msg = "+" + pointsGained + (comboMultiplier > 1 ? " (x" + comboMultiplier + "!)" : "");
       spawnFloatingText(msg, emojiChain[index].x, emojiChain[index].y);
     }
 
-    // Sort High to Low and Splice
+    // Sort and remove emojis
     matchIndices.sort((a, b) => b - a);
     for (let idx of matchIndices) {
       emojiChain.splice(idx, 1);
     }
+
+    // Play a "pop" sound here if you have one!
+    // if (isMusicOn && popSound) popSound.play();
   }
 }
 
@@ -463,14 +582,19 @@ function spawnFloatingText(msg, x, y) {
   });
 }
 
-async function saveProgressToCloud(levelReached) {
+async function saveProgressToCloud(levelReached, scoresObj) {
+  // If scoresObj wasn't passed, use the global levelHighScores object as a fallback
+  let finalScores = (scoresObj !== undefined) ? scoresObj : levelHighScores;
+
   try {
     await db.collection("players").doc(playerId).set({
       highestLevel: levelReached,
-      lastPlayed: firebase.firestore.FieldValue.serverTimestamp(),
-      totalScore: highScore // You can save the high score here too!
-    }, { merge: true }); // 'merge: true' updates existing data without deleting it
-    console.log("Progress saved to cloud!");
+      // We rename the field to 'levelHighScores' to match the new system
+      levelHighScores: finalScores, 
+      lastPlayed: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    console.log("Cloud Sync Successful! Level: " + levelReached);
   } catch (error) {
     console.error("Error saving to Firestore: ", error);
   }
